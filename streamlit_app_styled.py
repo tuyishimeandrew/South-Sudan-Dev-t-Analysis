@@ -2,13 +2,11 @@
 """
 Streamlit dashboard for South Sudan donor allocations.
 
-Updates:
-- Always use 'Budget ($m)' as the budget column.
-- Line chart aggregates budgets yearly (instead of monthly).
-- Bar chart: Budget vs Main Sector
-- Each visual title simplified and includes an interactive total displayed next to the title.
-- Date slider in the sidebar labelled 'Date' filters by the detected date column.
-- Projects by Status pie chart shows budget share (sum of Budget ($m)) instead of counts.
+Changes made in this version:
+- Trim donor / status / project title values to ensure filters and unique counts are accurate.
+- KPI logic updated to use trimmed values so 'Projects' and 'Donors' metrics add up correctly.
+- Date slider styled to appear blue.
+- No other functional changes beyond the requested items.
 """
 
 import streamlit as st
@@ -72,6 +70,12 @@ def try_parse_date_series(s: pd.Series) -> pd.Series:
     parsed3 = pd.to_datetime(cleaned, errors='coerce', dayfirst=True)
     return parsed3
 
+def cleaned_str_series(df: pd.DataFrame, col: str) -> pd.Series:
+    """Return a cleaned string series for column col: fillna, cast to str and strip whitespace."""
+    if col and col in df.columns:
+        return df[col].fillna('').astype(str).str.strip()
+    return pd.Series([], dtype=str)
+
 # --- Load data ---
 df = load_data(DATA_PATH)
 
@@ -102,18 +106,55 @@ else:
     main_sector_col = find_first_matching_column(df, main_sector_candidates)
     geo_col = find_first_matching_column(df, geo_candidates)
 
-    # Filters: only Donor and Project Status (plus new Date slider)
+    # --- Create trimmed/cleaned helper columns for reliable comparisons/counts ---
+    # These are used for filtering and KPI calculations.
+    if donor_col:
+        df['__donor_clean'] = cleaned_str_series(df, donor_col)
+    else:
+        df['__donor_clean'] = pd.Series([''] * len(df), index=df.index)
+
+    if status_col:
+        df['__status_clean'] = cleaned_str_series(df, status_col)
+    else:
+        df['__status_clean'] = pd.Series([''] * len(df), index=df.index)
+
+    if title_col:
+        df['__title_clean'] = cleaned_str_series(df, title_col)
+    else:
+        df['__title_clean'] = pd.Series([''] * len(df), index=df.index)
+
+    # Filters: only Donor and Project Status (plus Date slider)
     donors = ['All']
     if donor_col:
-        donors += sorted(df[donor_col].dropna().astype(str).unique().tolist())
+        # use cleaned donor values (trimmed) and remove empty strings
+        donor_vals = sorted([d for d in df['__donor_clean'].unique() if str(d).strip() != ''])
+        donors += donor_vals
     selected_donor = st.sidebar.selectbox('Donor', donors, index=0)
 
     statuses = ['All']
     if status_col:
-        statuses += sorted(df[status_col].dropna().astype(str).unique().tolist())
+        status_vals = sorted([s for s in df['__status_clean'].unique() if str(s).strip() != ''])
+        statuses += status_vals
     selected_status = st.sidebar.selectbox('Project Status', statuses, index=0)
 
     # --- Date slider for the detected date column (labelled 'Date') ---
+    # Add a little CSS to make the slider blue
+    BLUE = "#1f77b4"
+    st.markdown(
+        f"""
+        <style>
+        /* rc-slider track/handle (Streamlit slider) */
+        .rc-slider-rail {{ background: #e6eef9 !important; }}
+        .rc-slider-track {{ background: {BLUE} !important; }}
+        .rc-slider-handle {{ border: 2px solid {BLUE} !important; box-shadow: 0 0 0 6px rgba(31,119,180,0.12) !important; }}
+        /* native range input thumb (in some browsers) */
+        input[type="range"]::-webkit-slider-thumb {{ background: {BLUE} !important; }}
+        input[type="range"]::-moz-range-thumb {{ background: {BLUE} !important; }}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     selected_date_range = None
     if date_col:
         parsed_all = try_parse_date_series(df[date_col])
@@ -130,12 +171,18 @@ else:
         else:
             st.sidebar.info("Date column found but values not parseable for slider.")
 
+    # helper used to include filter selections into titles (kept for other parts of the app)
+    def title_with_filters(base_title: str) -> str:
+        donor_label = selected_donor if selected_donor != 'All' else 'All'
+        status_label = selected_status if selected_status != 'All' else 'All'
+        return f"{base_title} — Donor: {donor_label} | Status: {status_label}"
+
     # --- Filtering the dataframe according to sidebar ---
     mask = pd.Series(True, index=df.index)
     if selected_donor != 'All' and donor_col:
-        mask &= df[donor_col].astype(str) == selected_donor
+        mask &= df['__donor_clean'] == selected_donor
     if selected_status != 'All' and status_col:
-        mask &= df[status_col].astype(str) == selected_status
+        mask &= df['__status_clean'] == selected_status
     if selected_date_range and date_col:
         parsed_for_mask = try_parse_date_series(df[date_col])
         start_ts = pd.Timestamp(selected_date_range[0])
@@ -155,15 +202,33 @@ else:
     else:
         df_f['__date_parsed'] = pd.NaT
 
-    # --- KPIs ---
+    # --- KPIs (robust and using trimmed columns) ---
     st.title("South Sudan Donor Allocations")
     col1, col2, col3 = st.columns([1,1,1])
-    total_budget = df_f['__budget_numeric'].sum()
-    projects = df_f[title_col].nunique() if title_col in df_f.columns else len(df_f)
-    donor_count = df_f[donor_col].nunique() if donor_col in df_f.columns else None
+
+    # Total budget (always numeric; for empty filtered data this becomes 0.0)
+    total_budget = float(df_f['__budget_numeric'].sum()) if not df_f.empty else 0.0
+
+    # Projects: prefer unique non-empty trimmed project titles; fallback to row count
+    if '__title_clean' in df_f.columns:
+        proj_series = df_f['__title_clean'].dropna().astype(str).str.strip()
+        proj_series = proj_series[proj_series != '']
+        projects_count = int(proj_series.nunique()) if not proj_series.empty else 0
+    else:
+        projects_count = int(len(df_f)) if not df_f.empty else 0
+
+    # Donors: unique non-empty trimmed donors when column exists, otherwise N/A
+    if '__donor_clean' in df_f.columns and donor_col:
+        donor_series = df_f['__donor_clean'].dropna().astype(str).str.strip()
+        donor_series = donor_series[donor_series != '']
+        donors_count = int(donor_series.nunique()) if not donor_series.empty else 0
+        donors_display = f"{donors_count}"
+    else:
+        donors_display = "N/A"
+
     col1.metric('Total Budget ($m)', f"{total_budget:,.2f}")
-    col2.metric('Projects', projects)
-    col3.metric('Donors', donor_count if donor_count is not None else 'N/A')
+    col2.metric('Projects', f"{projects_count}")
+    col3.metric('Donors', donors_display)
 
     # --- Charts container ---
     st.markdown('---')
@@ -171,7 +236,6 @@ else:
     # 1) Funding by Main Sector (bar chart) — simple title + interactive total
     if main_sector_col and '__budget_numeric' in df_f.columns:
         by_sector = df_f.groupby(main_sector_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
-        # interactive total for this chart
         total_sector = by_sector['__budget_numeric'].sum()
         tcol, vcol = st.columns([6,1])
         tcol.markdown("### Funding by Main Sector")
@@ -240,7 +304,6 @@ else:
             temp['__year'] = temp['__date_parsed'].dt.year
             yearly_df = temp.groupby('__year', as_index=False)['__budget_numeric'].sum().sort_values('__year')
             total_yearly = yearly_df['__budget_numeric'].sum()
-            # show total next to the simple title
             _, vcol = st.columns([6,1])
             vcol.markdown(f"**Total (Budget $m):** {total_yearly:,.2f}")
             fig4 = px.line(yearly_df, x='__year', y='__budget_numeric', markers=True,
