@@ -6,8 +6,9 @@ Updates:
 - Always use 'Budget ($m)' as the budget column.
 - Line chart aggregates budgets yearly (instead of monthly).
 - Bar chart: Budget vs Main Sector
-- Each visual title includes the current filter selection (Donor and Project Status).
-- Added a Date slider (labelled 'Date') in the sidebar that filters by the detected date column.
+- Each visual title simplified and includes an interactive total displayed next to the title.
+- Date slider in the sidebar labelled 'Date' filters by the detected date column.
+- Projects by Status pie chart shows budget share (sum of Budget ($m)) instead of counts.
 """
 
 import streamlit as st
@@ -112,13 +113,11 @@ else:
         statuses += sorted(df[status_col].dropna().astype(str).unique().tolist())
     selected_status = st.sidebar.selectbox('Project Status', statuses, index=0)
 
-    # --- NEW: Date slider for the detected date column (labelled 'Date') ---
-    # This slider filters using the full dataset's parsed dates.
+    # --- Date slider for the detected date column (labelled 'Date') ---
     selected_date_range = None
     if date_col:
         parsed_all = try_parse_date_series(df[date_col])
         if parsed_all.notna().any():
-            # slider needs date objects
             min_date = parsed_all.min().date()
             max_date = parsed_all.max().date()
             selected_date_range = st.sidebar.slider(
@@ -131,12 +130,6 @@ else:
         else:
             st.sidebar.info("Date column found but values not parseable for slider.")
 
-    # helper used to include filter selections into titles
-    def title_with_filters(base_title: str) -> str:
-        donor_label = selected_donor if selected_donor != 'All' else 'All'
-        status_label = selected_status if selected_status != 'All' else 'All'
-        return f"{base_title} — Donor: {donor_label} | Status: {status_label}"
-
     # --- Filtering the dataframe according to sidebar ---
     mask = pd.Series(True, index=df.index)
     if selected_donor != 'All' and donor_col:
@@ -144,7 +137,6 @@ else:
     if selected_status != 'All' and status_col:
         mask &= df[status_col].astype(str) == selected_status
     if selected_date_range and date_col:
-        # apply date range filter using parsed series (aligns with df index)
         parsed_for_mask = try_parse_date_series(df[date_col])
         start_ts = pd.Timestamp(selected_date_range[0])
         end_ts = pd.Timestamp(selected_date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
@@ -176,10 +168,14 @@ else:
     # --- Charts container ---
     st.markdown('---')
 
-    # 1) Funding by Main Sector (bar chart)
-    st.markdown(f"### {title_with_filters('Funding by Main Sector')}")
+    # 1) Funding by Main Sector (bar chart) — simple title + interactive total
     if main_sector_col and '__budget_numeric' in df_f.columns:
         by_sector = df_f.groupby(main_sector_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
+        # interactive total for this chart
+        total_sector = by_sector['__budget_numeric'].sum()
+        tcol, vcol = st.columns([6,1])
+        tcol.markdown("### Funding by Main Sector")
+        vcol.markdown(f"**Total (Budget $m):** {total_sector:,.2f}")
         fig = px.bar(
             by_sector,
             x=main_sector_col,
@@ -189,48 +185,70 @@ else:
         )
         fig.update_traces(texttemplate='%{text:,.2f}', textposition='outside', cliponaxis=False)
         fig.update_layout(
-            title=dict(text=title_with_filters('Funding by Main Sector'), x=0.5),
+            title=dict(text='Funding by Main Sector', x=0.5),
             xaxis_tickangle=-45,
-            margin=dict(t=90, b=180, l=80, r=40)
+            margin=dict(t=60, b=160, l=80, r=40)
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
+        st.markdown("### Funding by Main Sector")
         st.info("Main Sector column not found — cannot draw 'Funding by Main Sector' bar chart.")
 
-    # 2) Projects by Status (pie chart)
-    st.markdown(f"### {title_with_filters('Projects by Status')}")
-    if status_col:
-        fig2 = px.pie(df_f, names=status_col, title=title_with_filters('Projects by Status'), hole=0.35)
-        fig2.update_traces(textinfo='label+percent+value', textposition='inside')
-        fig2.update_layout(margin=dict(t=80, b=80, l=80, r=80), title=dict(text=title_with_filters('Projects by Status'), x=0.5))
+    # 2) Projects by Status (pie chart — budget share) — simple title + interactive total
+    if status_col and '__budget_numeric' in df_f.columns:
+        status_df = df_f.groupby(status_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
+        total_status = status_df['__budget_numeric'].sum()
+        tcol, vcol = st.columns([6,1])
+        tcol.markdown("### Projects by Status")
+        vcol.markdown(f"**Total (Budget $m):** {total_status:,.2f}")
+        fig2 = px.pie(
+            status_df,
+            names=status_col,
+            values='__budget_numeric',
+            title='Projects by Status',
+            hole=0.35,
+            labels={status_col: 'Project Status', '__budget_numeric': 'Budget ($m)'}
+        )
+        fig2.update_traces(textinfo='label+percent+value', textposition='inside', texttemplate='%{label}<br>%{percent}<br>%{value:,.2f}')
+        fig2.update_layout(margin=dict(t=60, b=80, l=80, r=80), title=dict(text='Projects by Status', x=0.5))
         st.plotly_chart(fig2, use_container_width=True)
     else:
-        st.info("Project status column not found — cannot draw 'Projects by Status' pie chart.")
+        st.markdown("### Projects by Status")
+        st.info("Project status column not found or budget column missing — cannot draw 'Projects by Status' pie chart.")
 
-    # 3) Geographical Focus — Budget share (pie chart)
-    st.markdown(f"### {title_with_filters('Geographical Focus — Budget share')}")
+    # 3) Geographical Focus — Budget share (pie chart) — simple title + interactive total
     if geo_col and '__budget_numeric' in df_f.columns:
         geo_df = df_f.groupby(geo_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
-        fig3 = px.pie(geo_df, names=geo_col, values='__budget_numeric', title=title_with_filters('Geographical Focus — Budget share'), hole=0.35)
+        total_geo = geo_df['__budget_numeric'].sum()
+        tcol, vcol = st.columns([6,1])
+        tcol.markdown("### Geographical Focus — Budget share")
+        vcol.markdown(f"**Total (Budget $m):** {total_geo:,.2f}")
+        fig3 = px.pie(geo_df, names=geo_col, values='__budget_numeric', title='Geographical Focus — Budget share', hole=0.35)
         fig3.update_traces(textinfo='label+percent+value', textposition='inside')
-        fig3.update_layout(margin=dict(t=80, b=80, l=80, r=80), title=dict(text=title_with_filters('Geographical Focus — Budget share'), x=0.5))
+        fig3.update_layout(margin=dict(t=60, b=80, l=80, r=80), title=dict(text='Geographical Focus — Budget share', x=0.5))
         st.plotly_chart(fig3, use_container_width=True)
     else:
+        st.markdown("### Geographical Focus — Budget share")
         st.info("Geographical focus column not found — cannot draw geographical-budget pie chart.")
 
-    # 4) Date vs Budget (line chart yearly)
-    st.markdown(f"### {title_with_filters('Date vs Budget (Yearly)')}")
+    # 4) Date vs Budget (line chart yearly) — simple title + interactive total
+    st.markdown("")
+    st.markdown("### Date vs Budget (Yearly)")
     if '__date_parsed' in df_f.columns and not df_f['__date_parsed'].isna().all():
         temp = df_f[df_f['__date_parsed'].notna()].copy()
         if not temp.empty:
             temp['__year'] = temp['__date_parsed'].dt.year
             yearly_df = temp.groupby('__year', as_index=False)['__budget_numeric'].sum().sort_values('__year')
+            total_yearly = yearly_df['__budget_numeric'].sum()
+            # show total next to the simple title
+            _, vcol = st.columns([6,1])
+            vcol.markdown(f"**Total (Budget $m):** {total_yearly:,.2f}")
             fig4 = px.line(yearly_df, x='__year', y='__budget_numeric', markers=True,
                            labels={'__year': 'Year', '__budget_numeric': 'Budget ($m)'})
             fig4.update_traces(mode='lines+markers+text', textposition='top center',
                                text=yearly_df['__budget_numeric'].map(lambda v: f"{v:,.2f}"))
-            fig4.update_layout(title=dict(text=title_with_filters('Date vs Budget (Yearly)'), x=0.5),
-                               margin=dict(t=100, b=80, l=80, r=40))
+            fig4.update_layout(title=dict(text='Date vs Budget (Yearly)', x=0.5),
+                               margin=dict(t=60, b=80, l=80, r=40))
             st.plotly_chart(fig4, use_container_width=True)
         else:
             st.info("No valid date values found to build the yearly Date vs Budget line chart.")
