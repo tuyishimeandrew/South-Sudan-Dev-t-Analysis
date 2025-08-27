@@ -2,14 +2,11 @@
 """
 Streamlit dashboard for South Sudan donor allocations.
 
-Key features:
-- Uses "From Date" (preferred) for the Date vs Budget line chart.
-- Line chart: Date vs Budget (monthly aggregation)
-- Bar charts: show value labels
-- Pie charts: show labels, values and percentages
-- Pie chart: Geographical focus vs Budget
-- Robust detection of budget/donor/date/geo columns, with an option to manually choose columns.
-- DATA_PATH points to the raw GitHub Excel URL you provided.
+Updates:
+- Each visual's title includes the current filter selection (Donor and Project Status).
+- Increased margins and text positions so value labels and pie labels are not cut off.
+- Keeps preference for 'From Date' for the line chart.
+- Sidebar contains only filters (Donor and Project Status).
 """
 
 import streamlit as st
@@ -106,18 +103,18 @@ def set_bg(image_file):
 
 # set_bg("static/download.jpeg")  # optional background
 
-# --- Sidebar: filters and detection ---
-st.sidebar.header('Filters & settings')
+# --- Sidebar: filters only ---
+st.sidebar.header('Filters')
 
 if df.empty:
+    st.sidebar.warning("No data loaded. Check DATA_PATH and that the GitHub file is public.")
     st.warning("No data loaded. Check the DATA_PATH and that the GitHub file is public.")
 else:
-    # Prefer "From Date" explicitly for the date column
+    # Detection candidates (keeps From Date preference)
     budget_candidates = ['Budget ($)', 'Budget', 'Total budget', 'Total Budget', 'Budget (USD)', 'Budget_USD', 'Amount']
     donor_candidates = ['Donor', 'Funding Agency', 'Funder']
     status_candidates = ['Project Status', 'Status']
     project_title_candidates = ['Project Title', 'Title', 'ProjectName']
-    # Put 'From Date' first so it gets picked if present
     date_candidates = [
         'From Date', 'Date', 'Start Date', 'StartDate', 'Project Start Date',
         'Project Start', 'month.year', 'Month.Year', 'Month Year'
@@ -128,20 +125,11 @@ else:
     donor_col = find_first_matching_column(df, donor_candidates)
     status_col = find_first_matching_column(df, status_candidates)
     title_col = find_first_matching_column(df, project_title_candidates)
-    # This will now prefer "From Date" if present
+    # This will prefer "From Date" if present
     date_col = find_first_matching_column(df, date_candidates)
     geo_col = find_first_matching_column(df, geo_candidates)
 
-    st.sidebar.markdown("**Detected columns:**")
-    st.sidebar.write({
-        "Budget": budget_col or "Not found",
-        "Donor": donor_col or "Not found",
-        "Date (prefers 'From Date')": date_col or "Not found",
-        "Geographical focus": geo_col or "Not found",
-        "Project Status": status_col or "Not found",
-    })
-
-    # Basic filters
+    # Filters: only Donor and Project Status
     donors = ['All']
     if donor_col:
         donors += sorted(df[donor_col].dropna().astype(str).unique().tolist())
@@ -152,20 +140,11 @@ else:
         statuses += sorted(df[status_col].dropna().astype(str).unique().tolist())
     selected_status = st.sidebar.selectbox('Project Status', statuses, index=0)
 
-    # Manual override for columns (safe defaults)
-    if st.sidebar.checkbox("Manually choose columns", value=False):
-        cols_options = [None] + list(df.columns)
-        # find index safely
-        def safe_index(val):
-            try:
-                return cols_options.index(val)
-            except Exception:
-                return 0
-        budget_col = st.sidebar.selectbox("Choose budget column", options=cols_options, index=safe_index(budget_col))
-        date_col = st.sidebar.selectbox("Choose date column", options=cols_options, index=safe_index(date_col))
-        geo_col = st.sidebar.selectbox("Choose geographical column", options=cols_options, index=safe_index(geo_col))
-        donor_col = st.sidebar.selectbox("Choose donor column", options=cols_options, index=safe_index(donor_col))
-        status_col = st.sidebar.selectbox("Choose status column", options=cols_options, index=safe_index(status_col))
+    # helper used to include filter selections into titles
+    def title_with_filters(base_title: str) -> str:
+        donor_label = selected_donor if selected_donor != 'All' else 'All'
+        status_label = selected_status if selected_status != 'All' else 'All'
+        return f"{base_title} — Donor: {donor_label} | Status: {status_label}"
 
     # --- Filtering the dataframe according to sidebar ---
     mask = pd.Series(True, index=df.index)
@@ -184,11 +163,8 @@ else:
         df_f['__budget_numeric'] = 0.0
 
     # Parse date using chosen date column (prefer 'From Date' if detected)
-    parsed_dates = None
     if date_col:
-        parsed_dates = try_parse_date_series(df_f[date_col])
-        # fallback (second attempt) handled inside try_parse_date_series
-        df_f['__date_parsed'] = parsed_dates
+        df_f['__date_parsed'] = try_parse_date_series(df_f[date_col])
     else:
         df_f['__date_parsed'] = pd.NaT
 
@@ -204,37 +180,49 @@ else:
 
     # --- Charts container ---
     st.markdown('---')
-    st.markdown('### Funding by Donor (bar chart with value labels)')
+
+    # 1) Funding by Donor (bar chart)
+    st.markdown(f"### {title_with_filters('Funding by Donor')}")
     if donor_col and '__budget_numeric' in df_f.columns:
         by_donor = df_f.groupby(donor_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
-        fig = px.bar(by_donor, x=donor_col, y='__budget_numeric', text='__budget_numeric', labels={'__budget_numeric': 'Budget ($)'}, title='Funding by Donor')
+        fig = px.bar(by_donor, x=donor_col, y='__budget_numeric', text='__budget_numeric', labels={'__budget_numeric': 'Budget ($)'})
         # Value labels formatting
-        fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
-        fig.update_layout(uniformtext_minsize=8, uniformtext_mode='hide', xaxis_tickangle=-45, margin=dict(t=50, b=150))
+        fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', cliponaxis=False)
+        fig.update_layout(
+            title=dict(text=title_with_filters('Funding by Donor'), x=0.5),
+            uniformtext_minsize=8,
+            uniformtext_mode='hide',
+            xaxis_tickangle=-45,
+            margin=dict(t=80, b=180, l=80, r=40),
+            autosize=True
+        )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("Donor or budget column not found — cannot draw 'Funding by Donor' bar chart.")
 
-    st.markdown('### Projects by Status (pie chart with values & percentages)')
+    # 2) Projects by Status (pie chart)
+    st.markdown(f"### {title_with_filters('Projects by Status')}")
     if status_col:
-        fig2 = px.pie(df_f, names=status_col, title='Projects by Status', hole=0.35)
-        # show labels, values and percentages
+        fig2 = px.pie(df_f, names=status_col, title=title_with_filters('Projects by Status'), hole=0.35)
         fig2.update_traces(textinfo='label+percent+value', textposition='inside', insidetextorientation='radial')
+        fig2.update_layout(margin=dict(t=80, b=80, l=80, r=80), title=dict(text=title_with_filters('Projects by Status'), x=0.5), autosize=True)
         st.plotly_chart(fig2, use_container_width=True)
     else:
         st.info("Project status column not found — cannot draw 'Projects by Status' pie chart.")
 
-    st.markdown('### Geographical Focus — Budget share (pie chart with values & percentages)')
+    # 3) Geographical Focus — Budget share (pie chart)
+    st.markdown(f"### {title_with_filters('Geographical Focus — Budget share')}")
     if geo_col and '__budget_numeric' in df_f.columns:
         geo_df = df_f.groupby(geo_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
-        fig3 = px.pie(geo_df, names=geo_col, values='__budget_numeric', title='Geographical focus — Budget share', hole=0.35)
+        fig3 = px.pie(geo_df, names=geo_col, values='__budget_numeric', title=title_with_filters('Geographical Focus — Budget share'), hole=0.35)
         fig3.update_traces(textinfo='label+percent+value', textposition='inside', insidetextorientation='radial')
+        fig3.update_layout(margin=dict(t=80, b=80, l=80, r=80), title=dict(text=title_with_filters('Geographical Focus — Budget share'), x=0.5), autosize=True)
         st.plotly_chart(fig3, use_container_width=True)
     else:
         st.info("Geographical focus or budget column not found — cannot draw geographical-budget pie chart.")
 
-    st.markdown('### Date vs Budget (line chart using From Date if available)')
-    # For line chart aggregate budget by parsed date (monthly)
+    # 4) Date vs Budget (line chart using From Date if available)
+    st.markdown(f"### {title_with_filters('Date vs Budget')}")
     if '__date_parsed' in df_f.columns and not df_f['__date_parsed'].isna().all():
         temp = df_f.copy()
         temp = temp[temp['__date_parsed'].notna()]
@@ -242,14 +230,14 @@ else:
             # Aggregate by month for smoother trend
             temp['__period'] = temp['__date_parsed'].dt.to_period('M').dt.to_timestamp()
             time_df = temp.groupby('__period', as_index=False)['__budget_numeric'].sum().sort_values('__period')
-            fig4 = px.line(time_df, x='__period', y='__budget_numeric', markers=True, labels={'__period': 'Date', '__budget_numeric': 'Budget ($)'}, title='Date vs Budget (monthly aggregated)')
+            fig4 = px.line(time_df, x='__period', y='__budget_numeric', markers=True, labels={'__period': 'Date', '__budget_numeric': 'Budget ($)'})
             # show budget values at markers
             fig4.update_traces(mode='lines+markers+text', textposition='top center', text=time_df['__budget_numeric'].map(lambda v: f"{v:,.0f}"))
-            fig4.update_layout(margin=dict(t=50, b=50))
+            fig4.update_layout(title=dict(text=title_with_filters('Date vs Budget (monthly aggregated)'), x=0.5), margin=dict(t=100, b=80, l=80, r=40), autosize=True)
             st.plotly_chart(fig4, use_container_width=True)
         else:
             st.info("No valid date values found to build the Date vs Budget line chart.")
     else:
         st.info("Date column ('From Date' preferred) not found or not parseable — cannot draw Date vs Budget line chart.")
 
-# End of file — note: no raw data table/export displayed as requested.
+# End of file — note: no raw data table/export and no detected-columns/settings panel.
