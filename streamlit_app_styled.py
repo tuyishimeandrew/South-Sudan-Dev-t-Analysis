@@ -3,9 +3,10 @@
 Streamlit dashboard for South Sudan donor allocations.
 
 Updates:
-- Each visual's title includes the current filter selection (Donor and Project Status).
-- Increased margins and text positions so value labels and pie labels are not cut off.
-- Keeps preference for 'From Date' for the line chart.
+- Bar chart now shows Budget against Main Sector (prefers 'Main Sector' or similar names).
+- Each visual title includes the current filter selection (Donor and Project Status).
+- Increased margins and label positioning to avoid clipping.
+- Uses 'From Date' (preferred) for the line chart.
 - Sidebar contains only filters (Donor and Project Status).
 """
 
@@ -119,6 +120,8 @@ else:
         'From Date', 'Date', 'Start Date', 'StartDate', 'Project Start Date',
         'Project Start', 'month.year', 'Month.Year', 'Month Year'
     ]
+    # New: detect Main Sector column (prefer 'Main Sector')
+    main_sector_candidates = ['Main Sector', 'Main sector', 'Sector', 'MainSector', 'Main_Sector']
     geo_candidates = ['Geographical focus', 'Geographical Focus', 'Geographic focus', 'Geographic Focus', 'Location', 'Region', 'Geography']
 
     budget_col = find_first_matching_column(df, budget_candidates)
@@ -127,6 +130,8 @@ else:
     title_col = find_first_matching_column(df, project_title_candidates)
     # This will prefer "From Date" if present
     date_col = find_first_matching_column(df, date_candidates)
+    # Detect main sector column
+    main_sector_col = find_first_matching_column(df, main_sector_candidates)
     geo_col = find_first_matching_column(df, geo_candidates)
 
     # Filters: only Donor and Project Status
@@ -181,24 +186,31 @@ else:
     # --- Charts container ---
     st.markdown('---')
 
-    # 1) Funding by Donor (bar chart)
-    st.markdown(f"### {title_with_filters('Funding by Donor')}")
-    if donor_col and '__budget_numeric' in df_f.columns:
-        by_donor = df_f.groupby(donor_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
-        fig = px.bar(by_donor, x=donor_col, y='__budget_numeric', text='__budget_numeric', labels={'__budget_numeric': 'Budget ($)'})
-        # Value labels formatting
+    # 1) Funding by Main Sector (bar chart)
+    st.markdown(f"### {title_with_filters('Funding by Main Sector')}")
+    if main_sector_col and '__budget_numeric' in df_f.columns:
+        by_sector = df_f.groupby(main_sector_col, as_index=False)['__budget_numeric'].sum().sort_values('__budget_numeric', ascending=False)
+        fig = px.bar(
+            by_sector,
+            x=main_sector_col,
+            y='__budget_numeric',
+            text='__budget_numeric',
+            labels={main_sector_col: 'Main Sector', '__budget_numeric': 'Budget ($)'}
+        )
+        # Value labels formatting and avoid clipping
         fig.update_traces(texttemplate='%{text:,.0f}', textposition='outside', cliponaxis=False)
         fig.update_layout(
-            title=dict(text=title_with_filters('Funding by Donor'), x=0.5),
+            title=dict(text=title_with_filters('Funding by Main Sector'), x=0.5),
             uniformtext_minsize=8,
             uniformtext_mode='hide',
             xaxis_tickangle=-45,
-            margin=dict(t=80, b=180, l=80, r=40),
+            margin=dict(t=90, b=180, l=80, r=40),
             autosize=True
         )
         st.plotly_chart(fig, use_container_width=True)
     else:
-        st.info("Donor or budget column not found — cannot draw 'Funding by Donor' bar chart.")
+        st.info("Main Sector column or budget column not found — cannot draw 'Funding by Main Sector' bar chart. Detected main sector column: "
+                + (main_sector_col if main_sector_col else "Not found"))
 
     # 2) Projects by Status (pie chart)
     st.markdown(f"### {title_with_filters('Projects by Status')}")
