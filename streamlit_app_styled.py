@@ -138,7 +138,7 @@ else:
         df_f['__date_parsed'] = pd.NaT
 
     # --- KPIs ---
-    st.title("South Sudan Donor Allocations Dashboard")
+    st.title("South Sudan Donor Allocations")
     col1, col2, col3 = st.columns([1,1,1])
     total_budget = df_f['__budget_numeric'].sum()
     projects = df_f[title_col].nunique() if title_col in df_f.columns else len(df_f)
