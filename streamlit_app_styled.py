@@ -7,6 +7,7 @@ Updates:
 - Line chart aggregates budgets yearly (instead of monthly).
 - Bar chart: Budget vs Main Sector
 - Each visual title includes the current filter selection (Donor and Project Status).
+- Added a Date slider (labelled 'Date') in the sidebar that filters by the detected date column.
 """
 
 import streamlit as st
@@ -100,7 +101,7 @@ else:
     main_sector_col = find_first_matching_column(df, main_sector_candidates)
     geo_col = find_first_matching_column(df, geo_candidates)
 
-    # Filters: only Donor and Project Status
+    # Filters: only Donor and Project Status (plus new Date slider)
     donors = ['All']
     if donor_col:
         donors += sorted(df[donor_col].dropna().astype(str).unique().tolist())
@@ -110,6 +111,25 @@ else:
     if status_col:
         statuses += sorted(df[status_col].dropna().astype(str).unique().tolist())
     selected_status = st.sidebar.selectbox('Project Status', statuses, index=0)
+
+    # --- NEW: Date slider for the detected date column (labelled 'Date') ---
+    # This slider filters using the full dataset's parsed dates.
+    selected_date_range = None
+    if date_col:
+        parsed_all = try_parse_date_series(df[date_col])
+        if parsed_all.notna().any():
+            # slider needs date objects
+            min_date = parsed_all.min().date()
+            max_date = parsed_all.max().date()
+            selected_date_range = st.sidebar.slider(
+                'Date',
+                value=(min_date, max_date),
+                min_value=min_date,
+                max_value=max_date,
+                format="YYYY-MM-DD"
+            )
+        else:
+            st.sidebar.info("Date column found but values not parseable for slider.")
 
     # helper used to include filter selections into titles
     def title_with_filters(base_title: str) -> str:
@@ -123,6 +143,12 @@ else:
         mask &= df[donor_col].astype(str) == selected_donor
     if selected_status != 'All' and status_col:
         mask &= df[status_col].astype(str) == selected_status
+    if selected_date_range and date_col:
+        # apply date range filter using parsed series (aligns with df index)
+        parsed_for_mask = try_parse_date_series(df[date_col])
+        start_ts = pd.Timestamp(selected_date_range[0])
+        end_ts = pd.Timestamp(selected_date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(microseconds=1)
+        mask &= parsed_for_mask.between(start_ts, end_ts, inclusive="both")
 
     df_f = df[mask].copy()
 
