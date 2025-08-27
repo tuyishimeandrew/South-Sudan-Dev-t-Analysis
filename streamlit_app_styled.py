@@ -3,10 +3,9 @@
 Streamlit dashboard for South Sudan donor allocations.
 
 Changes made in this version:
-- Trim donor / status / project title values to ensure filters and unique counts are accurate.
-- KPI logic updated to use trimmed values so 'Projects' and 'Donors' metrics add up correctly.
-- Date slider styled to appear blue.
-- No other functional changes beyond the requested items.
+- Removed the Donors KPI metric.
+- Added a Geographical Focus filter in the sidebar (uses cleaned geo values).
+- No other changes beyond those requested.
 """
 
 import streamlit as st
@@ -73,7 +72,10 @@ def try_parse_date_series(s: pd.Series) -> pd.Series:
 def cleaned_str_series(df: pd.DataFrame, col: str) -> pd.Series:
     """Return a cleaned string series for column col: fillna, cast to str and strip whitespace."""
     if col and col in df.columns:
-        return df[col].fillna('').astype(str).str.strip()
+        s = df[col].fillna('').astype(str).str.strip()
+        s.index = df.index
+        return s
+    # return empty-series aligned with df index in calling code
     return pd.Series([], dtype=str)
 
 # --- Load data ---
@@ -123,10 +125,15 @@ else:
     else:
         df['__title_clean'] = pd.Series([''] * len(df), index=df.index)
 
-    # Filters: only Donor and Project Status (plus Date slider)
+    # NEW: Geographical cleaned column and sidebar filter
+    if geo_col:
+        df['__geo_clean'] = cleaned_str_series(df, geo_col)
+    else:
+        df['__geo_clean'] = pd.Series([''] * len(df), index=df.index)
+
+    # Filters: Donor, Project Status, and the new Geographical Focus (plus Date slider)
     donors = ['All']
     if donor_col:
-        # use cleaned donor values (trimmed) and remove empty strings
         donor_vals = sorted([d for d in df['__donor_clean'].unique() if str(d).strip() != ''])
         donors += donor_vals
     selected_donor = st.sidebar.selectbox('Donor', donors, index=0)
@@ -136,6 +143,13 @@ else:
         status_vals = sorted([s for s in df['__status_clean'].unique() if str(s).strip() != ''])
         statuses += status_vals
     selected_status = st.sidebar.selectbox('Project Status', statuses, index=0)
+
+    # Geographical focus filter (new)
+    geos = ['All']
+    if geo_col:
+        geo_vals = sorted([g for g in df['__geo_clean'].unique() if str(g).strip() != ''])
+        geos += geo_vals
+    selected_geo = st.sidebar.selectbox('Geographical focus', geos, index=0)
 
     # --- Date slider for the detected date column (labelled 'Date') ---
     # Add a little CSS to make the slider blue
@@ -183,6 +197,8 @@ else:
         mask &= df['__donor_clean'] == selected_donor
     if selected_status != 'All' and status_col:
         mask &= df['__status_clean'] == selected_status
+    if selected_geo != 'All' and geo_col:
+        mask &= df['__geo_clean'] == selected_geo
     if selected_date_range and date_col:
         parsed_for_mask = try_parse_date_series(df[date_col])
         start_ts = pd.Timestamp(selected_date_range[0])
@@ -204,7 +220,8 @@ else:
 
     # --- KPIs (robust and using trimmed columns) ---
     st.title("South Sudan Donor Allocations")
-    col1, col2, col3 = st.columns([1,1,1])
+    # Removed the Donors metric per request — show only two KPIs
+    col1, col2 = st.columns([1,1])
 
     # Total budget (always numeric; for empty filtered data this becomes 0.0)
     total_budget = float(df_f['__budget_numeric'].sum()) if not df_f.empty else 0.0
@@ -217,18 +234,8 @@ else:
     else:
         projects_count = int(len(df_f)) if not df_f.empty else 0
 
-    # Donors: unique non-empty trimmed donors when column exists, otherwise N/A
-    if '__donor_clean' in df_f.columns and donor_col:
-        donor_series = df_f['__donor_clean'].dropna().astype(str).str.strip()
-        donor_series = donor_series[donor_series != '']
-        donors_count = int(donor_series.nunique()) if not donor_series.empty else 0
-        donors_display = f"{donors_count}"
-    else:
-        donors_display = "N/A"
-
     col1.metric('Total Budget ($m)', f"{total_budget:,.2f}")
     col2.metric('Projects', f"{projects_count}")
-    col3.metric('Donors', donors_display)
 
     # --- Charts container ---
     st.markdown('---')
